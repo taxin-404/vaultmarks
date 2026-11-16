@@ -52,16 +52,29 @@ async function withHandleStore(mode, run) {
   }
 }
 
+// The stored record pairs the folder the user picked (the handle the browser
+// granted access to) with the subfolder Vaultmarks uses for notes. Storing the
+// child handle instead made Chrome's exact-path grant match fail, so the
+// restore prompt never appeared and every popup asked for the folder again.
+// Older versions stored the folder handle by itself; read it as the root.
+async function readStoredStore() {
+  const record = (await withHandleStore('readonly', (store) => idbRequest(store.get(STORE_KEY)))) ?? null;
+  if (!record) return null;
+  if (typeof record.getDirectoryHandle === 'function') return { handle: record, storePath: '' };
+  return { handle: record.handle ?? null, storePath: record.storePath ?? '' };
+}
+
 export async function getStoredStore() {
-  return (await withHandleStore('readonly', (store) => idbRequest(store.get(STORE_KEY)))) ?? null;
+  const stored = await readStoredStore();
+  return stored?.handle ?? null;
 }
 
 export async function clearStoredStore() {
   await withHandleStore('readwrite', (store) => idbRequest(store.delete(STORE_KEY)));
 }
 
-async function putStoreHandle(handle) {
-  await withHandleStore('readwrite', (store) => idbRequest(store.put(handle, STORE_KEY)));
+async function putStoreHandle(record) {
+  await withHandleStore('readwrite', (store) => idbRequest(store.put(record, STORE_KEY)));
 }
 
 export async function pickStore() {
@@ -73,21 +86,22 @@ export async function pickStore() {
     throw error;
   }
 
-  let store = picked;
+  let storePath = '';
   let settings;
   try {
-    store = await picked.getDirectoryHandle('Bookmarks');
+    await picked.getDirectoryHandle('Bookmarks');
+    storePath = 'Bookmarks';
     settings = {
       vaultName: picked.name,
-      storePath: 'Bookmarks',
+      storePath,
       storeLabel: `${picked.name}/Bookmarks`,
       obsidianLinks: true,
     };
   } catch {
-    settings = { vaultName: null, storePath: '', storeLabel: picked.name, obsidianLinks: false };
+    settings = { vaultName: null, storePath, storeLabel: picked.name, obsidianLinks: false };
   }
 
-  await putStoreHandle(store);
+  await putStoreHandle({ handle: picked, storePath });
   return settings;
 }
 
@@ -106,12 +120,15 @@ export async function requestPermission(handle) {
 }
 
 async function requireWritableStore() {
-  const handle = await getStoredStore();
-  if (!handle) throw new VaultError('no-store');
-  if ((await permissionOf(handle)) !== 'granted') {
+  const stored = await readStoredStore();
+  if (!stored?.handle) throw new VaultError('no-store');
+  if ((await permissionOf(stored.handle)) !== 'granted') {
     throw new VaultError('needs-permission', 'Folder access needs to be granted again');
   }
-  return handle;
+  // Permission belongs to the picked root; operations act on the notes folder
+  // below it. A missing Bookmarks folder surfaces as NotFoundError so the
+  // caller forgets the stored handle and offers a fresh pick.
+  return resolveDirectory(stored.handle, stored.storePath);
 }
 
 async function resolveDirectory(root, path, { create = false } = {}) {

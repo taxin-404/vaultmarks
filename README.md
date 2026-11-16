@@ -36,9 +36,16 @@ opens the library tab, where you pick your vault root (for example
 prompt can otherwise close the popup. The grant covers reading and writing
 inside that folder only.
 
-Chromium forgets folder permissions when it restarts. On the next launch the
-panel shows a **Reconnect folder** banner: one click re-grants access, and
-the bookmark list is rebuilt.
+Chromium can keep the folder grant between visits. When it asks, choose
+**Allow on every visit**: Vaultmarks then opens the saved folder without
+prompting, including after a browser restart. Choosing **Allow this time**
+grants access only until the panel closes, so the next open shows the
+**Reconnect folder** banner; one click re-grants access and rebuilds the list.
+
+If you set up Vaultmarks with an older version, reconnect once and pick the
+same vault root. Older versions stored the `Bookmarks` subfolder, which
+Chromium cannot match to the grant on the root; after that single re-pick the
+prompt is remembered.
 
 ## Usage
 
@@ -139,7 +146,7 @@ There are no host permissions and no background service worker.
 
 | Symptom | Fix |
 | --- | --- |
-| "Reconnect folder" banner | Chromium dropped the folder grant on restart. Click **Reconnect folder**. |
+| "Reconnect folder" banner | The folder grant ended: **Allow this time** was chosen, or browsing data was cleared. Click **Reconnect folder** and choose **Allow on every visit** next time. |
 | "Folder not found; choose it again." | The folder moved or was renamed. Click the button and re-pick it. |
 | "This page can't be saved." | Browser-internal pages (`chrome://…`, the Web Store, `file://`) can't be read. Use a normal web page. |
 | "This note changed in Obsidian. Reload and try again." | The note changed after the library loaded it. Click **Reload**, re-apply your edit. |

@@ -136,7 +136,17 @@ function makeRequest(result) {
   return request;
 }
 
-let currentHandle = null;
+// Mirrors the single handle record the extension keeps in IndexedDB. Unlike
+// the old fake, writes are recorded so tests can assert what pickStore stored.
+let storedValue = null;
+let nextPick = null;
+
+globalThis.showDirectoryPicker = async () => {
+  if (!nextPick) throw new Error('no picker result queued');
+  const picked = nextPick;
+  nextPick = null;
+  return picked;
+};
 
 globalThis.indexedDB = {
   open() {
@@ -147,9 +157,15 @@ globalThis.indexedDB = {
         transaction: () => {
           const tx = {};
           tx.objectStore = () => ({
-            get: () => makeRequest(currentHandle),
-            put: () => makeRequest(undefined),
-            delete: () => makeRequest(undefined),
+            get: () => makeRequest(storedValue),
+            put: (value) => {
+              storedValue = value;
+              return makeRequest(undefined);
+            },
+            delete: () => {
+              storedValue = null;
+              return makeRequest(undefined);
+            },
           });
           setTimeout(() => tx.oncomplete?.(), 0);
           return tx;
@@ -175,7 +191,7 @@ async function makeVault(files = {}) {
     await mkdir(join(full, '..'), { recursive: true });
     await writeFile(full, content);
   }
-  currentHandle = new FakeDir(root);
+  storedValue = new FakeDir(root);
   return root;
 }
 
@@ -437,4 +453,76 @@ test('moveDirectory leaves the source intact when a copy fails part-way', async 
     writeAttempts = 0;
   }
   assert.deepEqual((await readdir(join(root, 'Dev'))).sort(), ['A.md', 'B.md']);
+});
+
+// The folder picker grants access to the folder the user picked. Storing a
+// child handle instead makes the browser unable to match the saved handle to
+// that grant, so the popup asks for the folder again on every open. These
+// tests pin the stored record to the picked root and keep access to the
+// Bookmarks subfolder (or the root itself) as a separate path.
+async function pickVault(root) {
+  const picked = new FakeDir(root);
+  nextPick = picked;
+  const settings = await vaultfs.pickStore();
+  return { picked, settings };
+}
+
+test('pickStore stores the picked root so the browser can restore its grant', async () => {
+  const root = await makeVault({ 'Bookmarks/Alpha.md': ALPHA });
+  const { picked, settings } = await pickVault(root);
+
+  assert.equal(storedValue.storePath, 'Bookmarks');
+  assert.equal(await storedValue.handle.isSameEntry(picked), true);
+  assert.deepEqual(settings, {
+    vaultName: basename(root),
+    storePath: 'Bookmarks',
+    storeLabel: `${basename(root)}/Bookmarks`,
+    obsidianLinks: true,
+  });
+});
+
+test('pickStore stores the picked root for a vault without a Bookmarks folder', async () => {
+  const root = await makeVault({ 'Alpha.md': ALPHA });
+  const { picked, settings } = await pickVault(root);
+
+  assert.equal(storedValue.storePath, '');
+  assert.equal(await storedValue.handle.isSameEntry(picked), true);
+  assert.deepEqual(settings, {
+    vaultName: null,
+    storePath: '',
+    storeLabel: basename(root),
+    obsidianLinks: false,
+  });
+});
+
+test('getStoredStore returns the picked root, the handle permission checks use', async () => {
+  const root = await makeVault({ 'Bookmarks/Alpha.md': ALPHA });
+  const { picked } = await pickVault(root);
+
+  const handle = await vaultfs.getStoredStore();
+  assert.equal(await handle.isSameEntry(picked), true);
+});
+
+test('scanStore reads notes from the Bookmarks folder after a pick', async () => {
+  const root = await makeVault({ 'Bookmarks/Alpha.md': ALPHA, 'Loose.md': ALPHA });
+  await pickVault(root);
+
+  const { notes } = await vaultfs.scanStore();
+  assert.deepEqual(notes.map((note) => note.key), ['Alpha.md']);
+});
+
+test('scanStore still reads a vault stored by an older version', async () => {
+  const root = await makeVault({ 'Alpha.md': ALPHA });
+  storedValue = new FakeDir(root);
+
+  const { notes } = await vaultfs.scanStore();
+  assert.deepEqual(notes.map((note) => note.key), ['Alpha.md']);
+});
+
+test('a removed Bookmarks folder surfaces as NotFoundError so the store is forgotten', async () => {
+  const root = await makeVault({ 'Bookmarks/Alpha.md': ALPHA });
+  await pickVault(root);
+  await rm(join(root, 'Bookmarks'), { recursive: true });
+
+  await assert.rejects(() => vaultfs.scanStore(), (error) => error.name === 'NotFoundError');
 });

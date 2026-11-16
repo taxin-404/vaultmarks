@@ -81,9 +81,19 @@ Load unpacked from `chrome://extensions` if the flag is not used.
 
 ## Permission loss (Task 8)
 
-- [ ] Restart Chromium with the same profile and open the library: if the
-      grant was not retained, the **Reconnect folder** banner appears and
-      clicking it restores the list without a crash.
+- [ ] First pick: choose **Allow on every visit** when Chromium asks. Close
+      and reopen the panel and the library several times; the notes load
+      without a permission prompt each time.
+- [ ] Restart Chromium with the same profile and open the library: the notes
+      load without a prompt when the grant was persistent.
+- [ ] Forget the grant (`chrome://settings/content/filesystem` or clear the
+      extension's site data), reopen the library: the **Reconnect folder**
+      banner appears and clicking it restores the list without a crash.
+- [ ] Choose **Allow this time** instead, close the panel and reopen it: the
+      **Reconnect folder** banner appears; reconnecting works.
+- [ ] With a vault stored by an older version (the `Bookmarks` handle, not the
+      picked root), open the library: reconnect once by picking the vault root,
+      then reopen the panel and confirm no further prompt appears.
 - [ ] Close the library, `mv /tmp/vaultmarks-test-vault /tmp/gone`, reopen
       the library: onboarding returns with "Folder not found; choose it
       again." and picking a folder recovers.
@@ -121,4 +131,5 @@ Load unpacked from `chrome://extensions` if the flag is not used.
       favicon and tags, and that `Bookmark Viewer.md` lists it.
 - [ ] Delete that bookmark from the library and confirm it is in
       `.vaultmarks-trash`.
-- [ ] Restart Chromium and confirm the reconnect path.
+- [ ] Restart Chromium and confirm the vault opens without a prompt (or the
+      reconnect path if the grant was not persistent).
