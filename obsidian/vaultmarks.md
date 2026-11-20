@@ -826,7 +826,7 @@ function findExistingBookmark(url) {
     return null;
 }
 
-async function createBookmarkNote({ url, title, description, image, favicon, folder }) {
+async function createBookmarkNote({ url, title, description, image, favicon, folder, pending }) {
     const finalTitle = (title || guessTitleFromUrl(url)).trim() || url;
     const path = uniqueNotePath(folder || "Bookmarks", sanitizeFileName(finalTitle));
     const now = new Date();
@@ -836,6 +836,7 @@ async function createBookmarkNote({ url, title, description, image, favicon, fol
     if (description) lines.push(`description: ${JSON.stringify(description)}`);
     if (image) lines.push(`image: ${JSON.stringify(image)}`);
     if (favicon) lines.push(`favicon: ${JSON.stringify(favicon)}`);
+    if (pending) lines.push("metadata: pending");
     lines.push("tags:", '  - "bookmarks"', "---", "");
 
     if (image) lines.push(`![](${mdDestination(image)})`, "");
@@ -1046,7 +1047,8 @@ async function submitNewBookmark() {
             title: newTitleInput.value.trim() || guessTitleFromUrl(url),
             description: newDescInput.value.trim(),
             image: "",
-            favicon: ""
+            favicon: "",
+            pending: true
         });
         return;
     }
@@ -1143,6 +1145,103 @@ function renderAll(searchTerm) {
     }
 }
 
+// Rewrites a note that was saved while offline: drop the pending marker and
+// add the fields the fetch produced. Values already in the note win, and the
+// body is left alone.
+function applyFetchedMetadata(markdown, meta) {
+    const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/);
+    if (!match) return markdown;
+
+    const eol = match[0].indexOf("\r\n") !== -1 ? "\r\n" : "\n";
+    const lines = match[1].split(/\r?\n/);
+    const kept = lines.filter((line) => !/^\s*metadata:\s*pending\s*$/i.test(line));
+    const hasKey = (key) => kept.some((line) => new RegExp("^" + key + ":").test(line.trim()));
+
+    const additions = [];
+    if (meta.description && !hasKey("description")) additions.push("description: " + JSON.stringify(meta.description));
+    if (meta.image && !hasKey("image")) additions.push("image: " + JSON.stringify(meta.image));
+    if (meta.favicon && !hasKey("favicon")) additions.push("favicon: " + JSON.stringify(meta.favicon));
+
+    const tagsAt = kept.findIndex((line) => /^tags:/.test(line.trim()));
+    if (tagsAt === -1) kept.push(...additions);
+    else kept.splice(tagsAt, 0, ...additions);
+
+    if (kept.join(eol) === lines.join(eol)) return markdown;
+
+    return "---" + eol + kept.join(eol) + eol + "---" + markdown.slice(match[0].length);
+}
+
+// Dataview re-runs this block on refresh. Remember attempts for the life of
+// the window so a site that keeps failing is not fetched on every pass.
+const backfillTried = (() => {
+    if (typeof globalThis !== "undefined") {
+        if (!(globalThis.__vaultmarksBackfillTried instanceof Set)) {
+            globalThis.__vaultmarksBackfillTried = new Set();
+        }
+        return globalThis.__vaultmarksBackfillTried;
+    }
+    return new Set();
+})();
+let backfillStarted = false;
+
+function isPendingNote(page) {
+    const value = page.metadata !== undefined
+        ? page.metadata
+        : (page.file && page.file.frontmatter && page.file.frontmatter.metadata);
+    return typeof value === "string" && value.trim().toLowerCase() === "pending";
+}
+
+function rememberFetched(page, meta) {
+    try {
+        if (meta.description) page.description = meta.description;
+        if (meta.image) page.image = meta.image;
+        if (meta.favicon) page.favicon = meta.favicon;
+        delete page.metadata;
+    } catch (e) {
+        // Dataview pages can be read-only; the next render reads the file.
+    }
+}
+
+// Notes saved offline carry `metadata: pending`. Once there is a connection,
+// fill in what the fetch can now provide. Three per block render, so a long
+// offline queue never turns into a burst of requests.
+async function backfillPending() {
+    if (backfillStarted) return;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    backfillStarted = true;
+    if (typeof requestUrl !== "function") return;
+
+    const queue = [];
+    for (const page of pages) {
+        if (!isPendingNote(page)) continue;
+        const path = page.file && page.file.path;
+        if (!path || backfillTried.has(path)) continue;
+        if (!/^https?:\/\//i.test(String(page.url || ""))) continue;
+        queue.push(page);
+        if (queue.length === 3) break;
+    }
+
+    let changed = false;
+    for (const page of queue) {
+        backfillTried.add(page.file.path);
+        try {
+            const meta = await withTimeout(fetchPageMeta(page.url), 12000);
+            const file = app.vault.getAbstractFileByPath(page.file.path);
+            if (!file) continue;
+            const raw = await app.vault.read(file);
+            const next = applyFetchedMetadata(raw, meta);
+            if (next === raw) continue;
+            await app.vault.modify(file, next);
+            rememberFetched(page, meta);
+            changed = true;
+        } catch (e) {
+            console.warn(`Bookmark Viewer: could not fill in "${page.file.path}"`, e);
+        }
+    }
+
+    if (changed) renderAll(searchInput.value.trim());
+}
+
 let debounceTimer = null;
 searchInput.addEventListener("input", () => {
     clearTimeout(debounceTimer);
@@ -1161,4 +1260,12 @@ searchInput.addEventListener("keydown", (e) => {
 
 // Initial render (unfiltered, folders collapsed as usual)
 renderAll("");
+
+setTimeout(backfillPending, 600);
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("online", () => {
+        backfillStarted = false;
+        backfillPending();
+    });
+}
 ```

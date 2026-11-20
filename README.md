@@ -47,6 +47,8 @@ Obsidian Sync, git or any backup tool carries it.
 - **Obsidian view** — `obsidian/vaultmarks.md` is a ready-made DataviewJS
   page that renders the same folder as a searchable, collapsible library,
   with covers, edit/delete and fast add. No extension needed to read it.
+  Saved from a phone with no connection, the bookmark is written straight
+  away and its description and cover are filled in on the next online open.
 - **Surgical writes** — editing a bookmark patches only the keys it owns and
   leaves the rest of the note (comments, unknown keys, body, line endings,
   BOM) exactly as Obsidian wrote it.
