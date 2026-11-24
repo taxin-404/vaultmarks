@@ -668,6 +668,7 @@ function renderTree(tree, parentEl, forceOpen, tokens, parentPath) {
 
         details.addEventListener("toggle", () => {
             chevron.setAttribute("style", chevronFor(details.open));
+            if (details.open && typeof details.__bvFill === "function") details.__bvFill();
         });
 
         // Children live inside an indented panel with a guide line, so each
@@ -677,13 +678,23 @@ function renderTree(tree, parentEl, forceOpen, tokens, parentPath) {
             attr: { style: "margin: 0 0 6px 8px; padding-left: 12px; border-left: 1px solid rgba(167, 139, 250, 0.25);" }
         });
 
-        if (node._subfolders && Object.keys(node._subfolders).length > 0) {
-            renderTree(node._subfolders, body, forceOpen, tokens, folderPath);
-        }
+        // Cards (and child folders) are built the first time this folder is
+        // opened. Building all 243 cards up front made the viewer spend about
+        // 80% of its render time on folders nobody had opened yet, including
+        // cover and favicon requests for notes that were not on screen.
+        const fill = () => {
+            if (body.__bvFilled) return;
+            body.__bvFilled = true;
+            if (node._subfolders && Object.keys(node._subfolders).length > 0) {
+                renderTree(node._subfolders, body, forceOpen, tokens, folderPath);
+            }
+            if (node._files && node._files.length > 0) {
+                renderCards(node._files, body, tokens);
+            }
+        };
+        details.__bvFill = fill;
 
-        if (node._files && node._files.length > 0) {
-            renderCards(node._files, body, tokens);
-        }
+        if (forceOpen || details.open) fill();
     }
 }
 
@@ -1359,9 +1370,20 @@ function renderAll(searchTerm) {
     }
 
     if (!searchTerm && openFolders.size > 0) {
-        resultsContainer.querySelectorAll("details[data-folder]").forEach((details) => {
-            if (openFolders.has(details.getAttribute("data-folder"))) details.open = true;
-        });
+        // Opening a folder builds its children, which may include another
+        // folder that was open before the re-render. Repeat until the tree
+        // that was visible is visible again.
+        let opened = true;
+        while (opened) {
+            opened = false;
+            resultsContainer.querySelectorAll("details[data-folder]").forEach((details) => {
+                const path = details.getAttribute("data-folder");
+                if (details.open || !openFolders.has(path)) return;
+                if (typeof details.__bvFill === "function") details.__bvFill();
+                details.open = true;
+                opened = true;
+            });
+        }
     }
 }
 

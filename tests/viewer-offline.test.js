@@ -147,5 +147,17 @@ test('a card can refresh its own metadata and a new note renders immediately', (
   assert.match(viewer, /renderAll\(searchInput\.value\.trim\(\)\)/);
   assert.match(viewer, /const description = pageField\(page, "description"\)/);
   assert.match(viewer, /"data-folder": folderPath/);
-  assert.match(viewer, /openFolders\.has\(details\.getAttribute\("data-folder"\)\)/);
+  assert.match(viewer, /openFolders\.has\(path\)/);
+});
+
+test('folders build their cards on first open, not up front', () => {
+  assert.match(viewer, /const fill = \(\) => \{/);
+  assert.match(viewer, /if \(body\.__bvFilled\) return;/);
+  assert.match(viewer, /details\.__bvFill = fill;/);
+  assert.match(viewer, /if \(forceOpen \|\| details\.open\) fill\(\);/);
+  assert.match(viewer, /if \(details\.open && typeof details\.__bvFill === "function"\) details\.__bvFill\(\);/);
+  // Restoring a nested folder can create another open folder, so the loop
+  // must continue until no folder is left closed.
+  assert.match(viewer, /let opened = true;\s*while \(opened\) \{/);
+  assert.match(viewer, /details\.__bvFill\(\);\s*details\.open = true;\s*opened = true;/);
 });
