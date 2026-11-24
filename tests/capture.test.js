@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   normalizeMeta, isSavableUrl, savePrefill, preferredPageUrl,
   findVideoObject, structuredMeta, siteMeta, xPostTextFromTitle, cleanFacebookTitle,
-  jsonLdGeneralMeta, needsVideoWait,
+  jsonLdGeneralMeta, needsVideoWait, selectJsonLd,
 } from '../src/lib/capture.js';
 
 test('normalizeMeta resolves images, caps descriptions and falls back to the host', () => {
@@ -152,6 +152,21 @@ test('structuredMeta never keeps metadata from the previous video', () => {
   assert.equal(meta.title, 'Bare');
   assert.equal(meta.description, '');
   assert.equal(meta.image, '');
+});
+
+test('selectJsonLd keeps general metadata as well as video data', () => {
+  const scripts = [
+    '{"@type":"BreadcrumbList"}',
+    '{"@type":"Article","description":"Text","image":"https://example.com/i.png"}',
+    '{"@type":"VideoObject","name":"Video"}',
+    '{"@type":"Thing","image":"https://example.com/x.png"}',
+  ];
+  assert.deepEqual(selectJsonLd(scripts), [scripts[1], scripts[2], scripts[3]]);
+  assert.equal(
+    selectJsonLd(Array.from({ length: 12 }, (_, i) => `{"description":"${i}"}`)).length,
+    10,
+  );
+  assert.deepEqual(selectJsonLd(null), []);
 });
 
 test('jsonLdGeneralMeta prefers the article node over the site-wide block', () => {

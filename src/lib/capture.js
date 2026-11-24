@@ -88,6 +88,13 @@ export function savePrefill(meta, { lastCollection = '', selectedCollection = ''
   };
 }
 
+export function selectJsonLd(scripts) {
+  return (scripts ?? [])
+    .map((text) => String(text ?? ''))
+    .filter((text) => text.includes('VideoObject') || text.includes('"description"') || text.includes('"image"'))
+    .slice(0, 10);
+}
+
 function extractMeta() {
   const meta = (selector) => document.querySelector(selector)?.content ?? '';
 
@@ -231,9 +238,12 @@ function extractMeta() {
     // YouTube (and other video sites) leave the Open Graph tags on the first
     // video when navigating inside the app, but their JSON-LD is updated.
     // Read it here and let the extension choose the entry for this URL.
+    // extractMeta is serialised into the page, so it cannot call the module's
+    // selectJsonLd helper. Keep this filter in sync with selectJsonLd: article
+    // and product JSON-LD matter just as much as video data.
     jsonLd: [...document.querySelectorAll('script[type="application/ld+json"]')]
       .map((script) => script.textContent ?? '')
-      .filter((text) => text.includes('VideoObject'))
+      .filter((text) => text.includes('VideoObject') || text.includes('"description"') || text.includes('"image"'))
       .slice(0, 10),
     xPost: xPost(),
     fbPost: fbPost(),
@@ -538,7 +548,11 @@ const delay = (ms) => new Promise((resolve) => {
 
 async function readPage(tabId) {
   const results = await chrome.scripting.executeScript({ target: { tabId }, func: extractMeta });
-  return results?.[0]?.result ?? null;
+  const raw = results?.[0]?.result ?? null;
+  if (!raw) return null;
+  // Keep article/product JSON-LD as well as video data, and drop the
+  // breadcrumb/ads scripts that cannot contribute a description or image.
+  return { ...raw, jsonLd: selectJsonLd(raw.jsonLd) };
 }
 
 export async function captureActiveTab() {
