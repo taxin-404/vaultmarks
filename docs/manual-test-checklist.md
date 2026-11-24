@@ -38,8 +38,9 @@ Load unpacked from `chrome://extensions` if the flag is not used.
       not the first comment.
 - [ ] On a GitHub repository while logged in (logged-in GitHub sends no
       description meta tags there), **Save page** and **+** fill the
-      description from the repository's About text; a repository with no
-      description still saves an empty one.
+      description from the repository's About text and the cover from
+      GitHub's social-preview card; a repository with no description still
+      saves an empty one.
 - [ ] Save a page that publishes no description (a Wikipedia article is the
       easy one): the description is the opening paragraph. A feed or app shell
       with no matching heading (Hacker News, a logged-out feed) still saves an

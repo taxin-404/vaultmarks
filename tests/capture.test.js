@@ -247,6 +247,32 @@ test('the GitHub About fallback stays on github.com and drops the empty-repo pla
   );
 });
 
+test('siteMeta rebuilds the cover for a logged-in GitHub repository', () => {
+  const raw = { title: 'a/b', description: '', image: '', githubAbout: { text: 'About b' } };
+  const meta = siteMeta(raw, 'https://github.com/a/b');
+  assert.equal(meta.image, 'https://opengraph.githubassets.com/1/a/b');
+  assert.equal(meta.description, 'About b');
+
+  const file = siteMeta(raw, 'https://github.com/a/b/blob/main/README.md#readme');
+  assert.equal(file.image, 'https://opengraph.githubassets.com/1/a/b');
+
+  const kept = siteMeta({ ...raw, image: 'https://example.com/c.png' }, 'https://github.com/a/b');
+  assert.equal(kept.image, 'https://example.com/c.png');
+});
+
+test('the GitHub cover fallback ignores non-repository pages and other hosts', () => {
+  for (const url of [
+    'https://github.com/taxin-404',
+    'https://github.com/settings/profile',
+    'https://github.com/features/actions',
+    'https://github.com/search?q=x',
+    'https://gist.github.com/a/b',
+    'https://github.com.evil.test/a/b',
+  ]) {
+    assert.equal(siteMeta({ image: '' }, url).image, '', url);
+  }
+});
+
 test('savePrefill carries the captured fields and prefers the last-used collection', () => {
   const meta = {
     title: 'T', url: 'https://e.com', description: 'D',

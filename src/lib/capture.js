@@ -339,6 +339,33 @@ function hostOf(pageUrl) {
   }
 }
 
+// Top-level github.com paths that are not repository owners.
+const GITHUB_NON_REPO = new Set([
+  'about', 'account', 'apps', 'blog', 'codespaces', 'collections', 'contact',
+  'dashboard', 'enterprise', 'events', 'explore', 'features', 'issues', 'join',
+  'login', 'logout', 'marketplace', 'new', 'notifications', 'orgs',
+  'organizations', 'pricing', 'pulls', 'readme', 'search', 'security',
+  'sessions', 'settings', 'site', 'sponsors', 'topics', 'trending', 'users',
+]);
+
+// Logged-in GitHub also drops og:image on repository pages. The social
+// preview service renders a card for any repository and ignores the cache key
+// in the path, so the cover can be rebuilt from the repository URL.
+function githubRepoCover(pageUrl) {
+  if (hostOf(pageUrl) !== 'github.com') return '';
+  let url;
+  try {
+    url = new URL(String(pageUrl));
+  } catch {
+    return '';
+  }
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.length < 2) return '';
+  const [owner, repo] = parts;
+  if (GITHUB_NON_REPO.has(owner.toLowerCase()) || GITHUB_NON_REPO.has(repo.toLowerCase())) return '';
+  return `https://opengraph.githubassets.com/1/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+}
+
 // `Author on X: "the post text" / X` is what X uses for og:title. It is the
 // fallback when the post body has not rendered yet.
 export function xPostTextFromTitle(title) {
@@ -396,14 +423,18 @@ export function siteMeta(raw, pageUrl) {
     };
   }
 
-  // Logged-in GitHub serves repository pages without a description meta tag.
-  // The About box still has the repository's own description, so use it when
-  // the meta path came back empty.
+  // Logged-in GitHub serves repository pages without a description meta tag
+  // and without og:image. The About box still has the repository's own
+  // description, and a cover can be rebuilt from the repository URL.
   if (host === 'github.com') {
+    const changes = {};
     const about = githubAboutText(out.githubAbout);
-    if (about !== '' && collapse(out.description) === '') {
-      out = { ...out, description: about };
+    if (about !== '' && collapse(out.description) === '') changes.description = about;
+    if (collapse(out.image) === '') {
+      const cover = githubRepoCover(pageUrl);
+      if (cover !== '') changes.image = cover;
     }
+    if (Object.keys(changes).length > 0) out = { ...out, ...changes };
   }
 
   return out;
