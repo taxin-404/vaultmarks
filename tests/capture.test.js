@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   normalizeMeta, isSavableUrl, savePrefill, preferredPageUrl,
   findVideoObject, structuredMeta, siteMeta, xPostTextFromTitle, cleanFacebookTitle,
+  jsonLdGeneralMeta, needsVideoWait,
 } from '../src/lib/capture.js';
 
 test('normalizeMeta resolves images, caps descriptions and falls back to the host', () => {
@@ -34,6 +35,21 @@ test('normalizeMeta keeps an http favicon and trims the title', () => {
   assert.equal(meta.title, 'A page');
   assert.equal(meta.favicon, 'https://example.com/icon.png');
   assert.equal(meta.image, 'https://cdn.example.com/i.png');
+});
+
+test('normalizeMeta drops generic preview images and the page itself', () => {
+  for (const image of [
+    'https://abs.twimg.com/rweb/ssr/default/v2/og/image.png',
+    'https://s0.wp.com/i/blank.jpg',
+    'https://example.com/spacer.gif',
+    'https://pixel.wp.com/g.gif',
+  ]) {
+    assert.equal(normalizeMeta({ image }, 'https://example.com/a').image, '', image);
+  }
+  assert.equal(
+    normalizeMeta({ image: 'https://example.com/a' }, 'https://example.com/a').image,
+    '',
+  );
 });
 
 test('isSavableUrl accepts only http and https', () => {
@@ -108,6 +124,14 @@ test('findVideoObject prefers the richest matching entry', () => {
   );
 });
 
+test('only a video URL waits for structured data to catch up', () => {
+  const pageUrl = 'https://www.youtube.com/watch?v=NEWVIDEO123';
+  assert.equal(needsVideoWait([], pageUrl), true);
+  assert.equal(needsVideoWait([oldVideo], pageUrl), true);
+  assert.equal(needsVideoWait([oldVideo, newVideo], pageUrl), false);
+  assert.equal(needsVideoWait([oldVideo], 'https://example.com/article'), false);
+});
+
 test('structuredMeta replaces stale Open Graph fields with the current video', () => {
   const raw = {
     title: 'Old title', description: 'Old description', image: 'https://i.ytimg.com/vi/old.jpg',
@@ -128,6 +152,70 @@ test('structuredMeta never keeps metadata from the previous video', () => {
   assert.equal(meta.title, 'Bare');
   assert.equal(meta.description, '');
   assert.equal(meta.image, '');
+});
+
+test('jsonLdGeneralMeta prefers the article node over the site-wide block', () => {
+  const site = {
+    '@type': 'WebSite',
+    name: 'Example',
+    description: 'A site about examples.',
+    image: 'https://example.com/site.png',
+  };
+  const article = {
+    '@type': 'BlogPosting',
+    headline: 'A post',
+    description: 'What the post is about.',
+    image: { url: 'https://example.com/post.png' },
+  };
+  const meta = jsonLdGeneralMeta([site, article]);
+  assert.equal(meta.description, 'What the post is about.');
+  assert.equal(meta.image, 'https://example.com/post.png');
+
+  // A string script block is parsed too, and a plain object is accepted.
+  assert.equal(
+    jsonLdGeneralMeta([JSON.stringify({ '@type': 'Product', description: 'A widget' })]).description,
+    'A widget',
+  );
+  assert.equal(jsonLdGeneralMeta([{ '@type': 'Thing', name: 'No text here' }]).description, '');
+  assert.deepEqual(jsonLdGeneralMeta([]), { description: '', image: '' });
+});
+
+test('siteMeta falls back to JSON-LD only when the meta tags are empty', () => {
+  const raw = {
+    title: 'A post',
+    description: '',
+    image: '',
+    jsonLd: [{ '@type': 'Article', description: 'From JSON-LD.', image: 'https://example.com/ld.png' }],
+  };
+  const meta = siteMeta(raw, 'https://example.com/a-post');
+  assert.equal(meta.description, 'From JSON-LD.');
+  assert.equal(meta.image, 'https://example.com/ld.png');
+
+  const kept = siteMeta({ ...raw, description: 'Meta wins', image: 'https://example.com/og.png' }, 'https://example.com/a-post');
+  assert.equal(kept.description, 'Meta wins');
+  assert.equal(kept.image, 'https://example.com/og.png');
+});
+
+test('siteMeta does not read general JSON-LD when a video matched the page', () => {
+  const video = {
+    '@type': 'VideoObject',
+    '@id': 'https://www.youtube.com/watch?v=NEWVIDEO123',
+    name: 'The video',
+    description: 'The current video description.',
+    thumbnailUrl: 'https://i.ytimg.com/vi/NEWVIDEO123/hq.jpg',
+  };
+  const site = { '@type': 'WebSite', description: 'Site tagline', image: 'https://example.com/site.png' };
+  const url = 'https://www.youtube.com/watch?v=NEWVIDEO123';
+
+  // siteMeta on its own never borrows the site-wide block for a video page;
+  // structuredMeta is what supplies the matched video's own fields.
+  const bare = siteMeta({ title: '', description: '', image: '', jsonLd: [site, video] }, url);
+  assert.equal(bare.description, '');
+  assert.equal(bare.image, '');
+
+  const meta = siteMeta(structuredMeta({ title: '', description: '', image: '', jsonLd: [site, video] }, url), url);
+  assert.equal(meta.description, 'The current video description.');
+  assert.equal(meta.image, 'https://i.ytimg.com/vi/NEWVIDEO123/hq.jpg');
 });
 
 test('xPostTextFromTitle reads the post text out of an og:title', () => {
@@ -180,6 +268,27 @@ test('siteMeta drops the generic X image and leaves other sites alone', () => {
   const other = { title: 'T', image: 'https://example.com/i.png' };
   assert.equal(siteMeta(other, 'https://example.com/a').image, 'https://example.com/i.png');
   assert.equal(siteMeta(other, 'https://example.com/a'), other);
+});
+
+test('a generic meta image does not block a real JSON-LD or GitHub cover', () => {
+  const placeholder = 'https://abs.twimg.com/rweb/ssr/default/v2/og/image.png';
+  const withLd = siteMeta({
+    image: placeholder,
+    jsonLd: [{ '@type': 'Article', description: 'A post', image: 'https://example.com/real.png' }],
+  }, 'https://example.com/a');
+  assert.equal(withLd.image, 'https://example.com/real.png');
+
+  const github = siteMeta({ image: 'https://s0.wp.com/i/blank.jpg' }, 'https://github.com/a/b');
+  assert.equal(github.image, 'https://opengraph.githubassets.com/1/a/b');
+});
+
+test('GitHub boilerplate-only meta falls back to the JSON-LD description', () => {
+  const raw = {
+    description: 'Contribute to a/b development by creating an account on GitHub.',
+    githubAbout: null,
+    jsonLd: [{ '@type': 'SoftwareSourceCode', description: 'A real repository description.' }],
+  };
+  assert.equal(siteMeta(raw, 'https://github.com/a/b').description, 'A real repository description.');
 });
 
 test('siteMeta handles a missing display name and handle', () => {

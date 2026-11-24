@@ -45,6 +45,9 @@ Load unpacked from `chrome://extensions` if the flag is not used.
       easy one): the description is the opening paragraph. A feed or app shell
       with no matching heading (Hacker News, a logged-out feed) still saves an
       empty description rather than a random teaser.
+- [ ] Save a page with JSON-LD but no Open Graph tags: the description and
+      cover come from the article/product node, not the site-wide
+      `WebSite` tagline.
 - [ ] Saving writes the note and it appears in the list immediately (and in an
       open library tab via `vault-changed`).
 - [ ] With `chrome://settings` active, **Save page** and **+** both toast
@@ -166,6 +169,15 @@ Load unpacked from `chrome://extensions` if the flag is not used.
 - [ ] Save one real bookmark from the panel's **Save page**.
 - [ ] In Obsidian, confirm the new note shows title, description, cover,
       favicon and tags, and that `Bookmark Viewer.md` lists it.
+- [ ] In the Dataview viewer, press the circular-arrow refresh on a note with a
+      missing description or cover: only empty fields are written, the body
+      stays as it was, and the card updates immediately.
+- [ ] Refresh a note with a hand-written description: it stays exactly as
+      written.
+- [ ] Refresh a GitHub note whose description ends with "Contribute to ...
+      development by creating an account on GitHub.": the sentence is gone,
+      the repository's own words remain, and a generic X/WordPress preview
+      image is rejected instead of shown as a cover.
 - [ ] Delete that bookmark from the library and confirm it is in
       `.vaultmarks-trash`.
 - [ ] Restart Chromium and confirm the reconnect path.

@@ -46,9 +46,10 @@ Obsidian Sync, git or any backup tool carries it.
   panel and the tab are one codebase and one dataset, so they can never drift.
 - **Obsidian view** — `obsidian/vaultmarks.md` is a ready-made DataviewJS
   page that renders the same folder as a searchable, collapsible library,
-  with covers, edit/delete and fast add. No extension needed to read it.
-  Saved from a phone with no connection, the bookmark is written straight
-  away and its description and cover are filled in on the next online open.
+  with covers, edit/delete, metadata refresh and fast add. No extension needed
+  to read it. Saved from a phone with no connection, the bookmark is written
+  straight away and its description and cover are filled in on the next online
+  open.
 - **Surgical writes** — editing a bookmark patches only the keys it owns and
   leaves the rest of the note (comments, unknown keys, body, line endings,
   BOM) exactly as Obsidian wrote it.
@@ -119,7 +120,12 @@ author title. Logged-in GitHub leaves the description meta tags off repository
 pages, so Vaultmarks reads the repository's About text and rebuilds the cover
 from the repository URL. On logged-out GitHub pages it removes the
 "Contribute to … development by creating an account on GitHub." sentence that
-GitHub appends to every repository description. When a page publishes no
+GitHub appends to every repository description. When Open Graph tags are
+missing, it reads the page's JSON-LD instead, preferring the article, product
+or video node over the site-wide `WebSite` block so the page itself wins over
+the site tagline. It also drops generic preview images — X's logged-in logo,
+WordPress's blank image and tracking pixels, and spacer files — because a
+favicon tile looks better than a fake cover. When a page publishes no
 description at all —
 Wikipedia, for instance — Vaultmarks falls back to the opening paragraph of the
 article, and only when the page's heading matches its title, so app shells and
@@ -244,6 +250,10 @@ What it does:
   highlighted. <kbd>Esc</kbd> clears it; folders auto-expand while searching.
 - **Edit / Delete** — the pencil opens the note; the trash button arms itself
   and a second click moves the note to Obsidian's trash.
+- **Refresh metadata** — the circular arrow re-fetches a bookmark and fills
+  only the description, cover and favicon that are missing or empty. A
+  description or cover you already wrote is never replaced, and the card
+  updates as soon as the note is saved.
 - **Fast add** — `+` next to the search box: paste a link, pick a collection
   and press <kbd>Enter</kbd>. The page fetches title, description, cover and
   favicon through Obsidian's `requestUrl` and writes a note in the format

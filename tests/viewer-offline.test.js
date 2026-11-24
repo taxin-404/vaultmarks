@@ -22,7 +22,11 @@ function extractFunction(source, name) {
 }
 
 const applyFetchedMetadata = new Function(
-  `${extractFunction(viewer, 'applyFetchedMetadata')}; return applyFetchedMetadata;`,
+  `${extractFunction(viewer, 'frontmatterScalar')}
+   ${extractFunction(viewer, 'hostOf')}
+   ${extractFunction(viewer, 'stripGitHubBoilerplate')}
+   ${extractFunction(viewer, 'applyFetchedMetadata')}
+   return applyFetchedMetadata;`,
 )();
 
 const offlineNote = `---
@@ -77,10 +81,71 @@ test('a note without frontmatter is returned untouched', () => {
   assert.equal(applyFetchedMetadata(plain, { description: 'x', image: 'y', favicon: 'z' }), plain);
 });
 
+test('empty frontmatter fields are filled in place without duplicates', () => {
+  const empty = offlineNote.replace(
+    'metadata: pending',
+    'description: ""\nimage: ""\nmetadata: pending',
+  );
+  const next = applyFetchedMetadata(empty, {
+    description: 'An example page.',
+    image: 'https://example.com/cover.png',
+    favicon: 'https://example.com/favicon.ico',
+  });
+
+  assert.match(next, /^description: "An example page\."$/m);
+  assert.match(next, /^image: "https:\/\/example\.com\/cover\.png"$/m);
+  assert.doesNotMatch(next, /^description: ""$/m);
+  assert.doesNotMatch(next, /^image: ""$/m);
+  assert.equal((next.match(/^description:/gm) || []).length, 1);
+  assert.equal((next.match(/^image:/gm) || []).length, 1);
+  assert.doesNotMatch(next, /metadata: pending/);
+});
+
+test('GitHub boilerplate is removed but the repository words stay', () => {
+  const github = offlineNote
+    .replace('metadata: pending', 'description: "A useful repo. Contribute to a/b development by creating an account on GitHub."\nmetadata: pending')
+    .replace('url: "https://example.com"', 'url: "https://github.com/a/b"');
+  const next = applyFetchedMetadata(github, {
+    description: 'Fetched description',
+    image: '',
+    favicon: '',
+  }, 'https://github.com/a/b');
+
+  assert.match(next, /^description: "A useful repo\."$/m);
+  assert.doesNotMatch(next, /Contribute to/);
+  assert.doesNotMatch(next, /Fetched description/);
+
+  const other = github.replace('url: "https://github.com/a/b"', 'url: "https://example.com/a"');
+  const kept = applyFetchedMetadata(other, { description: '', image: '', favicon: '' }, 'https://example.com/a');
+  assert.match(kept, /Contribute to/);
+
+  const empty = offlineNote
+    .replace('metadata: pending', 'description: ""\nmetadata: pending')
+    .replace('url: "https://example.com"', 'url: "https://github.com/a/b"');
+  const boilerplateOnly = applyFetchedMetadata(empty, {
+    description: 'Contribute to a/b development by creating an account on GitHub.',
+    image: '',
+    favicon: '',
+  }, 'https://github.com/a/b');
+  assert.match(boilerplateOnly, /^description: ""$/m);
+});
+
 test('offline saves are marked pending and backfilled once online', () => {
   assert.match(viewer, /if \(pending\) lines\.push\("metadata: pending"\)/);
   assert.match(viewer, /async function backfillPending/);
   assert.match(viewer, /navigator\.onLine === false/);
-  assert.match(viewer, /applyFetchedMetadata\(raw, meta\)/);
+  assert.match(viewer, /applyFetchedMetadata\(raw, meta, page\.url\)/);
   assert.match(viewer, /pending: true/);
+});
+
+test('a card can refresh its own metadata and a new note renders immediately', () => {
+  assert.match(viewer, /REFRESH_ICON_SVG/);
+  assert.match(viewer, /async function refreshPage/);
+  assert.match(viewer, /applyFetchedMetadata\(raw, meta, url\)/);
+  assert.match(viewer, /rememberFetched\(page, next, before\)/);
+  assert.match(viewer, /rememberCreatedNote\(note, \{ \.\.\.meta, folder \}\)/);
+  assert.match(viewer, /renderAll\(searchInput\.value\.trim\(\)\)/);
+  assert.match(viewer, /const description = pageField\(page, "description"\)/);
+  assert.match(viewer, /"data-folder": folderPath/);
+  assert.match(viewer, /openFolders\.has\(details\.getAttribute\("data-folder"\)\)/);
 });

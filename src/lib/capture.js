@@ -26,6 +26,25 @@ function resolveHttpAsset(value, base) {
   }
 }
 
+// Preview images that are not previews: the X logo every logged-in page
+// carries, WordPress's tracking pixel and blank image, and common spacer
+// files. A note that keeps one of these looks worse than one with no cover,
+// because the card shows a generic logo instead of the site's own tile.
+const GENERIC_COVER = [
+  /^https?:\/\/abs\.twimg\.com\/rweb\/ssr\/default\//i,
+  /^https?:\/\/s0\.wp\.com\/i\/blank\.jpg(?:[?#]|$)/i,
+  /^https?:\/\/pixel\.wp\.com\//i,
+  /^https?:\/\/feeds\.feedburner\.com\//i,
+  /^https?:\/\/.*\/(?:spacer|transparent|blank|pixel|1x1)\.(?:gif|png)(?:[?#]|$)/i,
+];
+
+function cleanCoverImage(value, pageUrl) {
+  const url = String(value ?? '').trim();
+  if (url === '') return '';
+  if (url === String(pageUrl ?? '').trim()) return '';
+  return GENERIC_COVER.some((pattern) => pattern.test(url)) ? '' : url;
+}
+
 export function isSavableUrl(url) {
   try {
     const protocol = new URL(String(url)).protocol;
@@ -52,7 +71,7 @@ export function normalizeMeta(raw, pageUrl) {
     title: collapse(source.title) || domainOf(page),
     url: isSavableUrl(page) ? page : '',
     description: clip(collapse(source.description), 1000),
-    image: resolveHttpAsset(source.image, page).slice(0, 2000),
+    image: cleanCoverImage(resolveHttpAsset(source.image, page), page).slice(0, 2000),
     favicon,
   };
 }
@@ -256,12 +275,62 @@ function isVideoObject(node) {
   return type === 'VideoObject' || (Array.isArray(type) && type.includes('VideoObject'));
 }
 
+// YouTube updates the URL before it finishes swapping its structured data.
+// Only pages whose URL identifies a video need the extra read: an article
+// that embeds a video has a VideoObject too, but it is not waiting for one.
+export function needsVideoWait(values, pageUrl) {
+  return videoIdOf(pageUrl) !== '' && findVideoObject(values ?? [], pageUrl) == null;
+}
+
 function firstImage(value) {
   const first = Array.isArray(value) ? value[0] : value;
   if (typeof first === 'string') return collapse(first);
   if (first && typeof first === 'object') return collapse(first.url ?? first.contentUrl ?? '');
   return '';
 }
+
+const ARTICLE_TYPES = /^(article|newsarticle|blogposting|product|softwareapplication|book|recipe|event|videoobject)$/i;
+
+function typeOf(node) {
+  const type = node?.['@type'];
+  return String(Array.isArray(type) ? type[0] : type ?? '');
+}
+
+// Many sites publish no Open Graph tags but do publish JSON-LD. Read the
+// description and image from it, preferring article/product-like nodes over
+// the site-wide WebSite/Organization block, so a homepage's tagline does not
+// win over the page that is actually being saved.
+export function jsonLdGeneralMeta(values) {
+  const nodes = [];
+  for (const value of values ?? []) {
+    let parsed = value;
+    if (typeof parsed === 'string') {
+      if (!parsed.includes('"description"') && !parsed.includes('"image"')) continue;
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        continue;
+      }
+    }
+    collectObjects(parsed, nodes);
+  }
+
+  const preferred = nodes.filter((node) => ARTICLE_TYPES.test(typeOf(node)));
+  const out = { description: '', image: '' };
+  for (const node of [...preferred, ...nodes]) {
+    if (out.description === '') {
+      const text = collapse(node?.description);
+      if (text !== '') out.description = clip(text, 1200);
+    }
+    if (out.image === '') {
+      const image = firstImage(node?.image ?? node?.thumbnailUrl);
+      if (image !== '') out.image = image;
+    }
+    if (out.description !== '' && out.image !== '') break;
+  }
+  return out;
+}
+
 
 // Pick the VideoObject that describes this exact page. Sites that navigate
 // inside the app (YouTube) keep every video they played in the JSON-LD; the
@@ -395,6 +464,17 @@ export function siteMeta(raw, pageUrl) {
   const host = hostOf(pageUrl);
 
   let out = source;
+  const ld = jsonLdGeneralMeta(source.jsonLd);
+  const video = findVideoObject(source.jsonLd ?? [], pageUrl);
+  if (!video) {
+    if (collapse(out.description) === '' && ld.description !== '') {
+      out = { ...out, description: ld.description };
+    }
+    if (cleanCoverImage(collapse(out.image), pageUrl) === '' && ld.image !== '') {
+      out = { ...out, image: ld.image };
+    }
+  }
+
   if (X_HOSTS.has(host)) {
     if (X_PLACEHOLDER_IMAGE.test(String(out.image ?? '').trim())) out = { ...out, image: '' };
     const post = out.xPost;
@@ -438,11 +518,11 @@ export function siteMeta(raw, pageUrl) {
     const description = collapse(out.description);
     const cleaned = description.replace(GITHUB_BOILERPLATE, '').trim();
     if (cleaned !== description) {
-      changes.description = about || cleaned;
+      changes.description = about || cleaned || (video ? '' : ld.description);
     } else if (description === '' && about !== '') {
       changes.description = about;
     }
-    if (collapse(out.image) === '') {
+    if (cleanCoverImage(collapse(out.image), pageUrl) === '') {
       const cover = githubRepoCover(pageUrl);
       if (cover !== '') changes.image = cover;
     }
@@ -506,8 +586,7 @@ export async function captureActiveTab() {
       continue;
     }
     pageUrl = preferredPageUrl(tab.url, raw.url);
-    const waiting = Array.isArray(raw.jsonLd) && raw.jsonLd.length > 0
-      && findVideoObject(raw.jsonLd, pageUrl) == null;
+    const waiting = needsVideoWait(raw.jsonLd, pageUrl);
     if (!waiting || attempt === attempts - 1) break;
     // The page URL changed but its structured data has not caught up yet
     // (YouTube takes a few hundred milliseconds). Wait briefly and reread.

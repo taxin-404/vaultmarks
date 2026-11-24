@@ -2,6 +2,18 @@
 ```dataviewjs
 const pages = dv.pages('"Bookmarks"');
 
+// Refreshed fields that Dataview has not re-read yet. The override is merged
+// into search and card rendering, so a repaired note shows up immediately even
+// when Dataview's page objects are read-only.
+const metadataOverrides = new Map();
+
+function pageField(page, key) {
+    const path = page.file && page.file.path;
+    const override = path ? metadataOverrides.get(path) : null;
+    if (override && typeof override[key] === "string" && override[key] !== "") return override[key];
+    return page[key];
+}
+
 function buildTree(pages) {
     const root = {};
 
@@ -62,6 +74,9 @@ const EDIT_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height
 
 // Trash icon used for the delete button
 const TRASH_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+
+// Refresh icon used to re-fetch a bookmark's missing metadata
+const REFRESH_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"></path><path d="M21 3v6h-6"></path></svg>`;
 
 // Small UI glyphs (all SVG, no emoji)
 const SEARCH_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="m21 21-4.3-4.3"></path></svg>`;
@@ -211,7 +226,7 @@ function getSearchableFields(page) {
     const tagsVal = page.tags;
     return {
         title: (page.title || page.file.name || "").toLowerCase(),
-        description: (page.description || "").toLowerCase(),
+        description: (pageField(page, "description") || "").toLowerCase(),
         url: (page.url || "").toLowerCase(),
         domain: (getDomain(page.url) || "").toLowerCase(),
         folder: (page.file && page.file.folder ? page.file.folder : "").toLowerCase(),
@@ -424,9 +439,9 @@ function renderCards(files, container, tokens) {
     for (let page of files) {
         const title = page.title || page.file.name;
         const url = page.url || "#";
-        const description = page.description || "";
-        const image = page.og_image || page.image || page.thumbnail || page.cover || page.banner || "";
-        const favicon = page.favicon || "";
+        const description = pageField(page, "description") || "";
+        const image = page.og_image || pageField(page, "image") || page.thumbnail || page.cover || page.banner || "";
+        const favicon = pageField(page, "favicon") || "";
         const domain = getDomain(url);
 
         const card = cardGrid.createEl("div", {
@@ -510,6 +525,21 @@ function renderCards(files, container, tokens) {
             attr: { style: "display: flex; align-items: center; gap: 6px; flex-shrink: 0;" }
         });
 
+        const refreshBtn = actions.createEl("button", {
+            cls: "bv-action-btn",
+            attr: {
+                style: ACTION_BTN_STYLE,
+                title: "Fetch missing description and cover",
+                "aria-label": "Refresh this bookmark's metadata"
+            }
+        });
+        refreshBtn.innerHTML = REFRESH_ICON_SVG;
+        refreshBtn.onclick = (evt) => {
+            evt.preventDefault();
+            evt.stopPropagation();
+            refreshPage(page, refreshBtn);
+        };
+
         const editBtn = actions.createEl("button", {
             cls: "bv-action-btn",
             attr: {
@@ -591,7 +621,7 @@ function renderCards(files, container, tokens) {
     }
 }
 
-function renderTree(tree, parentEl, forceOpen, tokens) {
+function renderTree(tree, parentEl, forceOpen, tokens, parentPath) {
     const folderNames = Object.keys(tree)
         .filter(name => name !== "_rootFiles")
         .sort((a, b) => a.localeCompare(b));
@@ -599,9 +629,10 @@ function renderTree(tree, parentEl, forceOpen, tokens) {
     for (const folderName of folderNames) {
         const node = tree[folderName];
         const totalCount = countItems(node);
+        const folderPath = parentPath ? `${parentPath}/${folderName}` : folderName;
 
         const details = parentEl.createEl("details", {
-            attr: { style: "margin: 3px 0;" }
+            attr: { style: "margin: 3px 0;", "data-folder": folderPath }
         });
 
         if (forceOpen) {
@@ -647,7 +678,7 @@ function renderTree(tree, parentEl, forceOpen, tokens) {
         });
 
         if (node._subfolders && Object.keys(node._subfolders).length > 0) {
-            renderTree(node._subfolders, body, forceOpen, tokens);
+            renderTree(node._subfolders, body, forceOpen, tokens, folderPath);
         }
 
         if (node._files && node._files.length > 0) {
@@ -710,6 +741,138 @@ function parseHtmlAttributes(tagText) {
     return attrs;
 }
 
+function hostOf(pageUrl) {
+    try {
+        return new URL(String(pageUrl || "")).hostname.replace(/^www\./i, "").toLowerCase();
+    } catch (e) {
+        return "";
+    }
+}
+
+// Preview images that are not previews: X's logged-in logo, WordPress's
+// tracking pixel and blank image, and common spacer files. A card with no
+// cover looks better than one that shows a generic logo.
+function cleanCoverImage(value, pageUrl) {
+    const url = String(value || "").trim();
+    if (!url) return "";
+    if (url === String(pageUrl || "").trim()) return "";
+    const generic = [
+        /^https?:\/\/abs\.twimg\.com\/rweb\/ssr\/default\//i,
+        /^https?:\/\/s0\.wp\.com\/i\/blank\.jpg(?:[?#]|$)/i,
+        /^https?:\/\/pixel\.wp\.com\//i,
+        /^https?:\/\/feeds\.feedburner\.com\//i,
+        /^https?:\/\/.*\/(?:spacer|transparent|blank|pixel|1x1)\.(?:gif|png)(?:[?#]|$)/i
+    ];
+    return generic.some((pattern) => pattern.test(url)) ? "" : url;
+}
+
+// Logged-out GitHub appends this sentence to every repository description.
+// It describes the sign-up page, not the repository, so it is not saved.
+function stripGitHubBoilerplate(value) {
+    return String(value || "")
+        .replace(/\s*Contribute to [^\s/]+\/[^\s/]+ development by creating an account on GitHub\.?\s*$/i, "")
+        .trim();
+}
+
+// Logged-in GitHub drops og:image on repository pages. The social preview
+// service renders a card for any repository from its URL.
+function githubRepoCover(pageUrl) {
+    if (hostOf(pageUrl) !== "github.com") return "";
+    let url;
+    try {
+        url = new URL(String(pageUrl));
+    } catch (e) {
+        return "";
+    }
+    const nonRepo = new Set([
+        "about", "account", "apps", "blog", "codespaces", "collections", "contact",
+        "dashboard", "enterprise", "events", "explore", "features", "issues", "join",
+        "login", "logout", "marketplace", "new", "notifications", "orgs",
+        "organizations", "pricing", "pulls", "readme", "search", "security",
+        "sessions", "settings", "site", "sponsors", "topics", "trending", "users"
+    ]);
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length < 2) return "";
+    const owner = parts[0];
+    const repo = parts[1];
+    if (nonRepo.has(owner.toLowerCase()) || nonRepo.has(repo.toLowerCase())) return "";
+    return `https://opengraph.githubassets.com/1/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+}
+
+function jsonLdType(node) {
+    const type = node && node["@type"];
+    return String(Array.isArray(type) ? type[0] : type || "");
+}
+
+function jsonLdFirstImage(value) {
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const found = jsonLdFirstImage(item);
+            if (found) return found;
+        }
+        return "";
+    }
+    if (value && typeof value === "object") {
+        return String(value.url || value.contentUrl || "").trim();
+    }
+    return String(value || "").trim();
+}
+
+function collectJsonLdObjects(value, out) {
+    if (Array.isArray(value)) {
+        for (const item of value) collectJsonLdObjects(item, out);
+        return;
+    }
+    if (!value || typeof value !== "object") return;
+    out.push(value);
+    if (Array.isArray(value["@graph"])) collectJsonLdObjects(value["@graph"], out);
+}
+
+// Many sites publish no Open Graph tags but do publish JSON-LD. Prefer
+// article/product-like nodes over the site-wide WebSite/Organization block,
+// so a homepage's tagline does not win over the page being saved.
+function jsonLdGeneralMeta(values) {
+    const nodes = [];
+    for (const value of values || []) {
+        let parsed = value;
+        if (typeof parsed === "string") {
+            if (!parsed.includes('"description"') && !parsed.includes('"image"')) continue;
+            try {
+                parsed = JSON.parse(parsed);
+            } catch (e) {
+                continue;
+            }
+        }
+        collectJsonLdObjects(parsed, nodes);
+    }
+
+    const articleType = /^(article|newsarticle|blogposting|product|softwareapplication|book|recipe|event|videoobject)$/i;
+    const preferred = nodes.filter((node) => articleType.test(jsonLdType(node)));
+    const out = { description: "", image: "" };
+    for (const node of preferred.concat(nodes)) {
+        if (!out.description && node && typeof node.description === "string") {
+            out.description = node.description.replace(/\s+/g, " ").trim();
+        }
+        if (!out.image && node) {
+            out.image = jsonLdFirstImage(node.image || node.thumbnailUrl);
+        }
+        if (out.description && out.image) break;
+    }
+    return out;
+}
+
+function jsonLdScripts(html) {
+    const values = [];
+    const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+    let match;
+    while ((match = re.exec(html))) {
+        const attrs = parseHtmlAttributes(match[1]);
+        const type = String(attrs.type || "").split(";")[0].trim().toLowerCase();
+        if (type === "application/ld+json") values.push(match[2].trim());
+    }
+    return values;
+}
+
 // Pulls title, description, cover and favicon out of a page's HTML.
 function extractPageMeta(html, pageUrl) {
     const metaTags = [];
@@ -734,17 +897,26 @@ function extractPageMeta(html, pageUrl) {
         }
     };
 
+    const structured = jsonLdGeneralMeta(jsonLdScripts(html));
+    const github = hostOf(pageUrl) === "github.com";
+
     let title = metaValue("og:title", "twitter:title");
     if (!title) {
         const titleMatch = html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
         title = titleMatch ? decodeEntities(titleMatch[1]).replace(/\s+/g, " ").trim() : "";
     }
 
-    const description = metaValue("og:description", "description", "twitter:description")
+    let description = metaValue("og:description", "description", "twitter:description")
         .replace(/\s+/g, " ")
         .trim();
+    if (github) description = stripGitHubBoilerplate(description);
+    if (!description) description = structured.description.replace(/\s+/g, " ").trim();
+    if (github) description = stripGitHubBoilerplate(description);
 
-    const image = absolute(metaValue("og:image", "og:image:url", "twitter:image", "twitter:image:src"));
+    const metaImage = absolute(metaValue("og:image", "og:image:url", "twitter:image", "twitter:image:src"));
+    let image = cleanCoverImage(metaImage, pageUrl);
+    if (!image) image = cleanCoverImage(absolute(structured.image), pageUrl);
+    image = image || githubRepoCover(pageUrl);
 
     let favicon = "";
     const linkRe = /<link\b[^>]*>/gi;
@@ -771,7 +943,7 @@ async function fetchPageMeta(url) {
     }
     const html = response.text || "";
     if (!html) throw new Error("Empty response");
-    return extractPageMeta(html, url);
+    return { ...extractPageMeta(html, url), url };
 }
 
 function withTimeout(promise, ms) {
@@ -845,6 +1017,37 @@ async function createBookmarkNote({ url, title, description, image, favicon, fol
 
     await app.vault.create(path, lines.join("\n"));
     return { path, title: finalTitle };
+}
+
+// Dataview refreshes the block on its own schedule. Add the new note to the
+// current list immediately so its card appears as soon as it is saved.
+function rememberCreatedNote(note, meta) {
+    const path = note.path;
+    const slash = path.lastIndexOf("/");
+    const page = {
+        file: {
+            path,
+            name: note.title,
+            basename: note.title,
+            folder: slash === -1 ? "Bookmarks" : path.slice(0, slash)
+        },
+        title: note.title,
+        url: meta.url,
+        description: meta.description || "",
+        image: meta.image || "",
+        favicon: meta.favicon || "",
+        tags: ["bookmarks"]
+    };
+    if (meta.pending) page.metadata = "pending";
+    try {
+        if (typeof pages.push !== "function") return;
+        for (const existing of pages) {
+            if (existing.file && existing.file.path === path) return;
+        }
+        pages.push(page);
+    } catch (e) {
+        // A read-only DataArray is harmless; Dataview adds the note next pass.
+    }
 }
 
 // --- Search bar ---
@@ -1017,8 +1220,10 @@ async function finishCreate(meta) {
     try {
         const note = await createBookmarkNote({ ...meta, folder });
         addedThisSession.set(urlKey(meta.url), { title: note.title, folder });
+        rememberCreatedNote(note, { ...meta, folder });
         resetCreator();
         setCreateStatus(`Saved “${note.title}”.`);
+        renderAll(searchInput.value.trim());
         newUrlInput.focus();
     } catch (e) {
         console.error("Bookmark Viewer: could not create the note", e);
@@ -1117,6 +1322,15 @@ const summaryEl = dv.container.createEl("div", {
 const resultsContainer = dv.container.createEl("div", { cls: "bv-results" });
 
 function renderAll(searchTerm) {
+    // A refresh or a new note must not collapse the folder the user is
+    // browsing. Search results are fully expanded anyway.
+    const openFolders = new Set();
+    if (!searchTerm) {
+        resultsContainer.querySelectorAll("details[data-folder]").forEach((details) => {
+            if (details.open) openFolders.add(details.getAttribute("data-folder"));
+        });
+    }
+
     resultsContainer.empty();
     if (coverObserver) coverObserver.disconnect();
 
@@ -1143,24 +1357,81 @@ function renderAll(searchTerm) {
     if (tree._rootFiles && tree._rootFiles.length > 0) {
         renderCards(tree._rootFiles, resultsContainer, tokens);
     }
+
+    if (!searchTerm && openFolders.size > 0) {
+        resultsContainer.querySelectorAll("details[data-folder]").forEach((details) => {
+            if (openFolders.has(details.getAttribute("data-folder"))) details.open = true;
+        });
+    }
 }
 
-// Rewrites a note that was saved while offline: drop the pending marker and
-// add the fields the fetch produced. Values already in the note win, and the
-// body is left alone.
-function applyFetchedMetadata(markdown, meta) {
+// Reads a single-line YAML scalar, enough for the fields this viewer writes.
+function frontmatterScalar(line) {
+    const raw = String(line || "").replace(/^\s*[^:]+:\s*/, "").trim();
+    if (raw === "") return "";
+    if (raw.startsWith('"')) {
+        try {
+            return String(JSON.parse(raw));
+        } catch (e) {
+            return raw.replace(/^"|"$/g, "");
+        }
+    }
+    if (raw.startsWith("'")) return raw.replace(/^'|'$/g, "").replace(/''/g, "'");
+    return raw;
+}
+
+// The metadata fields a card can show, as they stand in the note right now.
+function frontmatterFields(markdown) {
+    const match = String(markdown || "").match(/^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/);
+    if (!match) return {};
+    const fields = {};
+    for (const line of match[1].split(/\r?\n/)) {
+        const field = line.match(/^(description|image|favicon):\s*(.*)$/);
+        if (field) fields[field[1]] = frontmatterScalar(line);
+    }
+    return fields;
+}
+
+// Rewrites a note that was saved while offline or repaired from a card: drop
+// the pending marker and fill fields that are missing or empty. Values already
+// in the note win, and the body is left alone.
+function applyFetchedMetadata(markdown, meta, pageUrl) {
     const match = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/);
     if (!match) return markdown;
 
     const eol = match[0].indexOf("\r\n") !== -1 ? "\r\n" : "\n";
     const lines = match[1].split(/\r?\n/);
     const kept = lines.filter((line) => !/^\s*metadata:\s*pending\s*$/i.test(line));
-    const hasKey = (key) => kept.some((line) => new RegExp("^" + key + ":").test(line.trim()));
-
+    const fieldAt = (key) => kept.findIndex((line) => new RegExp("^" + key + ":").test(line.trim()));
+    const incoming = meta && typeof meta === "object" ? meta : {};
+    const github = hostOf(pageUrl || incoming.url) === "github.com";
     const additions = [];
-    if (meta.description && !hasKey("description")) additions.push("description: " + JSON.stringify(meta.description));
-    if (meta.image && !hasKey("image")) additions.push("image: " + JSON.stringify(meta.image));
-    if (meta.favicon && !hasKey("favicon")) additions.push("favicon: " + JSON.stringify(meta.favicon));
+
+    const applyField = (key, rawValue) => {
+        const value = key === "description" && github ? stripGitHubBoilerplate(rawValue) : rawValue;
+        const index = fieldAt(key);
+        if (index === -1) {
+            if (value) additions.push(key + ": " + JSON.stringify(value));
+            return;
+        }
+        let current = frontmatterScalar(kept[index]);
+        // GitHub's sign-up sentence describes the site, not the bookmark, so
+        // it is removed even from a description that was already present.
+        if (key === "description" && github) {
+            const cleaned = stripGitHubBoilerplate(current);
+            if (cleaned !== current) {
+                kept[index] = "description: " + JSON.stringify(cleaned);
+                current = cleaned;
+            }
+        }
+        if (current === "" && value) {
+            kept[index] = key + ": " + JSON.stringify(value);
+        }
+    };
+
+    applyField("description", incoming.description);
+    applyField("image", incoming.image);
+    applyField("favicon", incoming.favicon);
 
     const tagsAt = kept.findIndex((line) => /^tags:/.test(line.trim()));
     if (tagsAt === -1) kept.push(...additions);
@@ -1191,14 +1462,76 @@ function isPendingNote(page) {
     return typeof value === "string" && value.trim().toLowerCase() === "pending";
 }
 
-function rememberFetched(page, meta) {
+// Keeps the card in step with the note the viewer just wrote. Values are
+// remembered by path because Dataview's page objects can be read-only.
+function rememberFetched(page, markdown, before) {
+    const path = page.file && page.file.path;
+    const after = frontmatterFields(markdown);
+    const override = (path && metadataOverrides.get(path)) || {};
+    const previous = before || {};
+    for (const key of ["description", "image", "favicon"]) {
+        const old = String(previous[key] || "").trim();
+        const value = String(after[key] || "").trim();
+        if (value && value !== old) override[key] = value;
+    }
+    if (path && Object.keys(override).length > 0) metadataOverrides.set(path, override);
     try {
-        if (meta.description) page.description = meta.description;
-        if (meta.image) page.image = meta.image;
-        if (meta.favicon) page.favicon = meta.favicon;
+        for (const key of ["description", "image", "favicon"]) {
+            if (override[key] && String(page[key] || "").trim() === "") page[key] = override[key];
+        }
         delete page.metadata;
     } catch (e) {
-        // Dataview pages can be read-only; the next render reads the file.
+        // Dataview pages can be read-only; the overrides carry the values.
+    }
+}
+
+const refreshingPaths = new Set();
+
+// Re-fetches a bookmark and fills only the fields that are empty. A card the
+// user has already described or given a cover is never overwritten.
+async function refreshPage(page, button) {
+    const path = page.file && page.file.path;
+    const url = String(page.url || "");
+    if (!path || refreshingPaths.has(path)) return;
+    if (!/^https?:\/\//i.test(url)) {
+        summaryEl.setText("This bookmark has no http(s) URL to refresh.");
+        return;
+    }
+
+    const title = page.title || page.file.name;
+    const before = {
+        description: String(pageField(page, "description") || ""),
+        image: String(pageField(page, "image") || ""),
+        favicon: String(pageField(page, "favicon") || "")
+    };
+
+    refreshingPaths.add(path);
+    if (button) button.disabled = true;
+    summaryEl.setText(`Refreshing “${title}”…`);
+    try {
+        const meta = await withTimeout(fetchPageMeta(url), 12000);
+        const file = app.vault.getAbstractFileByPath(path);
+        if (!file) throw new Error("the note is missing");
+        const raw = await app.vault.read(file);
+        const next = applyFetchedMetadata(raw, meta, url);
+        if (next !== raw) await app.vault.modify(file, next);
+        rememberFetched(page, next, before);
+        renderAll(searchInput.value.trim());
+
+        const after = frontmatterFields(next);
+        const gained = ["description", "image", "favicon"].some((key) => {
+            const value = String(after[key] || "").trim();
+            return value !== "" && value !== String(before[key] || "").trim();
+        });
+        summaryEl.setText(gained ? `Updated “${title}”.` : `Nothing new to add for “${title}”.`);
+    } catch (e) {
+        console.warn(`Bookmark Viewer: could not refresh "${path}"`, e);
+        const message = `Could not refresh “${title}”: ${e.message || e}`;
+        summaryEl.setText(message);
+        if (typeof Notice === "function") new Notice(message);
+    } finally {
+        refreshingPaths.delete(path);
+        if (button) button.disabled = false;
     }
 }
 
@@ -1228,11 +1561,16 @@ async function backfillPending() {
             const meta = await withTimeout(fetchPageMeta(page.url), 12000);
             const file = app.vault.getAbstractFileByPath(page.file.path);
             if (!file) continue;
+            const before = {
+                description: String(pageField(page, "description") || ""),
+                image: String(pageField(page, "image") || ""),
+                favicon: String(pageField(page, "favicon") || "")
+            };
             const raw = await app.vault.read(file);
-            const next = applyFetchedMetadata(raw, meta);
+            const next = applyFetchedMetadata(raw, meta, page.url);
             if (next === raw) continue;
             await app.vault.modify(file, next);
-            rememberFetched(page, meta);
+            rememberFetched(page, next, before);
             changed = true;
         } catch (e) {
             console.warn(`Bookmark Viewer: could not fill in "${page.file.path}"`, e);
