@@ -214,6 +214,39 @@ test('siteMeta reads a Facebook post when the page has no meta tags', () => {
   assert.equal(kept.description, 'Meta wins');
 });
 
+test('siteMeta reads the About box when logged-in GitHub drops the meta tags', () => {
+  const raw = {
+    title: 'hxreborn/morphe-patches: 🧩 Android patches for Viber',
+    description: '',
+    image: '',
+    githubAbout: { text: '  🧩 Android   patches for Viber, BeReal and more. ' },
+  };
+  const meta = siteMeta(raw, 'https://github.com/hxreborn/morphe-patches');
+  assert.equal(meta.description, '🧩 Android patches for Viber, BeReal and more.');
+
+  const kept = siteMeta({ ...raw, description: 'Meta wins' }, 'https://github.com/hxreborn/morphe-patches');
+  assert.equal(kept.description, 'Meta wins');
+});
+
+test('the GitHub About fallback stays on github.com and drops the empty-repo placeholder', () => {
+  assert.equal(
+    siteMeta({ description: '', githubAbout: { text: 'About the repo' } }, 'https://gist.github.com/a/b').description,
+    '',
+  );
+  assert.equal(
+    siteMeta({ description: '', githubAbout: { text: 'About the repo' } }, 'https://github.com.evil.test/a/b').description,
+    '',
+  );
+  assert.equal(
+    siteMeta({ description: '', githubAbout: { text: 'No description, website, or topics provided.' } }, 'https://github.com/a/b').description,
+    '',
+  );
+  assert.equal(
+    siteMeta({ description: '', githubAbout: null }, 'https://github.com/a/b').description,
+    '',
+  );
+});
+
 test('savePrefill carries the captured fields and prefers the last-used collection', () => {
   const meta = {
     title: 'T', url: 'https://e.com', description: 'D',

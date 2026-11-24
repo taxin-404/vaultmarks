@@ -147,6 +147,19 @@ function extractMeta() {
     return text === '' ? null : { text: text.slice(0, 1600) };
   };
 
+  // Logged-in GitHub drops the description meta tags on repository pages
+  // (logged-out visitors still get them, and those win in siteMeta). The
+  // repository's own text is in the About box, so read it from there.
+  const githubAbout = () => {
+    const host = location.hostname.replace(/^www\./i, '').toLowerCase();
+    if (host !== 'github.com') return null;
+    const node = document.querySelector('p[class*="SidebarAbout"][class*="description"]')
+      || document.querySelector('[itemprop="description"]')
+      || document.querySelector('.BorderGrid-cell > p.f4');
+    const text = node ? squeeze(node.textContent) : '';
+    return text === '' ? null : { text: text.slice(0, 1200) };
+  };
+
   // While logged in, X leaves og:description empty and points og:image at a
   // generic logo, even though the post text and its media are in the DOM.
   // Read those here so the bookmark keeps the post the user is looking at.
@@ -205,6 +218,7 @@ function extractMeta() {
       .slice(0, 10),
     xPost: xPost(),
     fbPost: fbPost(),
+    githubAbout: githubAbout(),
   };
 }
 
@@ -304,6 +318,15 @@ export function structuredMeta(raw, pageUrl) {
 const X_HOSTS = new Set(['x.com', 'twitter.com', 'mobile.twitter.com']);
 const FB_HOST = /(^|\.)facebook\.com$/;
 
+// A repository with no description shows this in its About box. It is a UI
+// placeholder, not something the repo says about itself.
+const GITHUB_NO_ABOUT = /^No description, website, or topics provided\.?$/i;
+
+function githubAboutText(value) {
+  const text = value && typeof value === 'object' ? collapse(value.text) : '';
+  return GITHUB_NO_ABOUT.test(text) ? '' : text;
+}
+
 // X ships this as og:image on every logged-in page. It is a logo, not the
 // page's picture, so it is never worth saving as a cover.
 const X_PLACEHOLDER_IMAGE = /^https?:\/\/abs\.twimg\.com\/rweb\/ssr\/default\//i;
@@ -371,6 +394,16 @@ export function siteMeta(raw, pageUrl) {
       title: title === '' ? out.title : title,
       description: collapse(out.description) || text,
     };
+  }
+
+  // Logged-in GitHub serves repository pages without a description meta tag.
+  // The About box still has the repository's own description, so use it when
+  // the meta path came back empty.
+  if (host === 'github.com') {
+    const about = githubAboutText(out.githubAbout);
+    if (about !== '' && collapse(out.description) === '') {
+      out = { ...out, description: about };
+    }
   }
 
   return out;

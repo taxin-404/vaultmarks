@@ -36,6 +36,10 @@ Load unpacked from `chrome://extensions` if the flag is not used.
 - [ ] On facebook.com while logged in, save a post: the title has no `(1)`
       counter and no ` | Facebook` suffix, and the description is the post body,
       not the first comment.
+- [ ] On a GitHub repository while logged in (logged-in GitHub sends no
+      description meta tags there), **Save page** and **+** fill the
+      description from the repository's About text; a repository with no
+      description still saves an empty one.
 - [ ] Save a page that publishes no description (a Wikipedia article is the
       easy one): the description is the opening paragraph. A feed or app shell
       with no matching heading (Hacker News, a logged-out feed) still saves an

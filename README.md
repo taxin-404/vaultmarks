@@ -115,7 +115,9 @@ previous page. On X, where a logged-in page has no meta description and points
 its preview image at a logo, it reads the post text and media from the page:
 the title becomes *Author (@handle) on X*, the description is the post, and the
 cover is its photo or video still. Facebook posts work the same way without the
-author title. When a page publishes no description at all — Wikipedia, for
+author title. Logged-in GitHub leaves the description meta tags off repository
+pages, so Vaultmarks reads the repository's About text instead. When a page
+publishes no description at all — Wikipedia, for
 instance — Vaultmarks falls back to the opening paragraph of the article, and
 only when the page's heading matches its title, so app shells and feed pages
 never donate an unrelated teaser.
