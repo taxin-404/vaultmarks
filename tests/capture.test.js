@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   normalizeMeta, isSavableUrl, savePrefill, preferredPageUrl,
   findVideoObject, structuredMeta, siteMeta, xPostTextFromTitle, cleanFacebookTitle,
@@ -152,6 +153,15 @@ test('structuredMeta never keeps metadata from the previous video', () => {
   assert.equal(meta.title, 'Bare');
   assert.equal(meta.description, '');
   assert.equal(meta.image, '');
+});
+
+test('the injected page reader keeps general JSON-LD, not only video data', () => {
+  const source = readFileSync(new URL('../src/lib/capture.js', import.meta.url), 'utf8');
+  assert.match(
+    source,
+    /text\.includes\('VideoObject'\) \|\| text\.includes\('"description"'\) \|\| text\.includes\('"image"'\)/,
+  );
+  assert.match(source, /jsonLd: selectJsonLd\(raw\.jsonLd\)/);
 });
 
 test('selectJsonLd keeps general metadata as well as video data', () => {
