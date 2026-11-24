@@ -322,6 +322,10 @@ const FB_HOST = /(^|\.)facebook\.com$/;
 // placeholder, not something the repo says about itself.
 const GITHUB_NO_ABOUT = /^No description, website, or topics provided\.?$/i;
 
+// Logged-out GitHub appends this sentence to every repository description.
+// It describes the sign-up page, not the repository, so it is not saved.
+const GITHUB_BOILERPLATE = /\s*Contribute to [^\s/]+\/[^\s/]+ development by creating an account on GitHub\.?\s*$/i;
+
 function githubAboutText(value) {
   const text = value && typeof value === 'object' ? collapse(value.text) : '';
   return GITHUB_NO_ABOUT.test(text) ? '' : text;
@@ -426,10 +430,18 @@ export function siteMeta(raw, pageUrl) {
   // Logged-in GitHub serves repository pages without a description meta tag
   // and without og:image. The About box still has the repository's own
   // description, and a cover can be rebuilt from the repository URL.
+  // Logged-out pages do have the meta tags, but their description ends with
+  // GitHub's "Contribute to..." sign-up sentence, which is not saved.
   if (host === 'github.com') {
     const changes = {};
     const about = githubAboutText(out.githubAbout);
-    if (about !== '' && collapse(out.description) === '') changes.description = about;
+    const description = collapse(out.description);
+    const cleaned = description.replace(GITHUB_BOILERPLATE, '').trim();
+    if (cleaned !== description) {
+      changes.description = about || cleaned;
+    } else if (description === '' && about !== '') {
+      changes.description = about;
+    }
     if (collapse(out.image) === '') {
       const cover = githubRepoCover(pageUrl);
       if (cover !== '') changes.image = cover;

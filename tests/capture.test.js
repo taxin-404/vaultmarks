@@ -247,6 +247,29 @@ test('the GitHub About fallback stays on github.com and drops the empty-repo pla
   );
 });
 
+test('GitHub keeps the repository text and drops the sign-up sentence', () => {
+  const raw = {
+    description: '🔮 Beautiful dots for Arch hyprland and bspwm. Contribute to meowrch/meowrch development by creating an account on GitHub.',
+    githubAbout: { text: '🔮 Beautiful dots for Arch hyprland and bspwm' },
+  };
+  assert.equal(
+    siteMeta(raw, 'https://github.com/meowrch/meowrch').description,
+    '🔮 Beautiful dots for Arch hyprland and bspwm',
+  );
+
+  // A repository with no About at all: the boilerplate is removed, and the
+  // About fallback is empty as well.
+  const bare = { description: 'Contribute to a/b development by creating an account on GitHub.', githubAbout: null };
+  assert.equal(siteMeta(bare, 'https://github.com/a/b').description, '');
+
+  // The same wording on another host is left alone.
+  const other = { description: 'Contribute to a/b development by creating an account on GitHub.', githubAbout: null };
+  assert.equal(
+    siteMeta(other, 'https://example.com/a/b').description,
+    'Contribute to a/b development by creating an account on GitHub.',
+  );
+});
+
 test('siteMeta rebuilds the cover for a logged-in GitHub repository', () => {
   const raw = { title: 'a/b', description: '', image: '', githubAbout: { text: 'About b' } };
   const meta = siteMeta(raw, 'https://github.com/a/b');
